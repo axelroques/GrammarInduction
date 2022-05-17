@@ -1,28 +1,29 @@
 
 from sax import SAX_subsequences
 from .tree.tree import Tree
-from repair import repair
+from repair import RePair
 
 from collections import defaultdict
 import matplotlib.pyplot as plt
+import pandas as pd
 import numpy as np
 
 
 class GrammarInduction:
 
-    def __init__(self, df, w=3, a=4, n=100, k=10,
-                 alphabet_type='letters'):
+    def __init__(self, df, w=3, a=4, n=100, k=10):
 
         # Raw data
         self.df = df
 
         # SAX parameters
         self.sax = SAX_subsequences(df, w=w, a=a, n=n, k=k,
-                                    alphabet_type=alphabet_type)
+                                    alphabet_type='letters')
 
         # Some parameters that will be used when plotting
         self.trees = []
         self.sax_time_vectors = None
+        self.ranked_rules = None
 
     def process(self):
         """
@@ -40,12 +41,11 @@ class GrammarInduction:
             self.SAX_phrases)
 
         # Find the grammar rules
-        self.grammars = []
-        for key in self.reduced.keys():
-            self.grammars.append(repair(self.reduced[key]))
+        self.grammars = [RePair(self.reduced[key])
+                         for key in self.reduced.keys()]
 
         # Rank the rules
-        self.ranked_grammars = self.rank_grammar_rules(self.grammars)
+        self.ranked_rules = self.rank_grammar_rules(self.grammars)
 
         return
 
@@ -88,7 +88,6 @@ class GrammarInduction:
         for key in SAX_phrases.keys():
 
             # Iterate over the SAX words
-            count = 1
             i_reduced = 0
             i_start = 0
             last_word = None
@@ -119,16 +118,13 @@ class GrammarInduction:
                     # Add ending position of the last_word
                     mapping[key][last_word][i_reduced-1].append(i-i_start)
 
-                    # Reset count
-                    count = 1
-
                     # Update loop parameters
                     i_start = i
                     last_word = word
                     i_reduced += 1
 
-                else:
-                    count += 1
+            # Termination
+            mapping[key][word][i_reduced-1].append(i-i_start+1)
 
         return reduced, mapping
 
@@ -149,8 +145,8 @@ class GrammarInduction:
 
             # Arrays for the indirect stable sort
             sizes = np.array([len(r)
-                              for r in grammar.results['Expanded Rule']])
-            occurrences = np.array(grammar.results['Occurrence'])
+                              for r in grammar.phrase.results['Expanded Rule']])
+            occurrences = np.array(grammar.phrase.results['Occurrence'])
 
             # Sorting indices: sort first by decreasing length,
             # then by occurrence.
@@ -163,12 +159,19 @@ class GrammarInduction:
 
         return dataframes
 
-    def show_rules(self, i_col):
+    def show_rules(self, i_col, ordered=True):
         """
         Returns a dataframe with the ranked rules for the 
         desired column. 
         """
-        return self.ranked_grammars[i_col]
+
+        if isinstance(self.ranked_rules, list):
+            if ordered:
+                return self.ranked_rules[i_col]
+            else:
+                return self.grammars[i_col].get_results()
+        else:
+            raise RuntimeError('No rules found, run process method first.')
 
     def show_motifs(self, i_col, i_rule):
         """
@@ -187,7 +190,7 @@ class GrammarInduction:
 
         # Retrieve correct variables for the search
         tree = self.trees[i_col]
-        motif = self.ranked_grammars[i_col].iloc[i_rule, 1]
+        motif = self.ranked_rules[i_col].iloc[i_rule, 1]
         mapping = self.mapping[self.df.columns[i_col+1]]
 
         print(f'Column {self.df.columns[i_col+1]}')
@@ -305,13 +308,13 @@ class GrammarInduction:
         for indices in motif_indices:
 
             t_start = sax_time_vectors[indices[0]][0]
-            t_end = sax_time_vectors[indices[1]][-1]
+            t_end = sax_time_vectors[indices[1]-1][-1]
 
             # Add some time to the end because the SAX
             # algorithm only computes the starting time
             # of a segment
-            t_end += sax_time_vectors[indices[1]][1] - \
-                sax_time_vectors[indices[1]][0]
+            t_end += sax_time_vectors[indices[0]][1] - \
+                sax_time_vectors[indices[0]][0]
 
             time_indices.append(tuple((t_start, t_end)))
 
@@ -331,7 +334,7 @@ class GrammarInduction:
                        (df['t'] < indices[1])]
             )
 
-        # Plot the
+        # Plot
         _, ax = plt.subplots(figsize=(13, 8))
 
         ax.plot(df['t'], df.iloc[:, i_col+1], c='k', alpha=0.7)
